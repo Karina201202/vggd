@@ -1,0 +1,632 @@
+Program Main
+
+  character(*), parameter:: InputFile='input.txt',OutputFile='data.plt' ! names of input and output files
+  character MeshFile*30        ! name of file with computational mesh
+  integer, parameter:: IO = 12 ! input-output unit
+  real,allocatable,dimension(:,:):: X,Y,P,CellVolume ! scalar arrays
+  real,allocatable,dimension(:,:,:):: CellCenter,IFaceCenter,IFaceVector,JFaceCenter,JFaceVector ! vector arrays
+  real,allocatable,dimension(:,:,:):: GradP
+  real,allocatable,dimension(:,:):: Ro, U, V, T, M
+  real:: Pin, Uin, Vin, Tin, gamma, cp, Rm, cfl, rtmp
+  integer:: NI, NJ, Nt, I, J
+ 
+!===  READ INPUT FILE ===
+  WRITE(*,*) 'Read input file: ', InputFile
+  OPEN(IO,FILE=InputFile)
+  READ(IO,*) MeshFile  ! read name of file with computational mesh
+  READ(IO,*) Pin
+  READ(IO,*) Uin
+  READ(IO,*) Vin
+  READ(IO,*) Tin 
+  READ(IO,*) gamma
+  READ(IO,*) cp
+  READ(IO,*) Rm
+  READ(IO,*) cfl
+  READ(IO,*) Nt
+  CLOSE(IO)
+
+!===   READ NODES NUMBER (NI,NJ) FROM FILE WITH MESH ===
+  WRITE(*,*) 'Read nodes number from file: ', MeshFile
+  OPEN(IO,FILE = MeshFile)
+  READ(IO,*) NI,NJ
+  WRITE(*,*) 'NI, NJ = ',NI,NJ
+
+!=== ALLOCATE ALL ARRAYS ===
+  WRITE(*,*) 'Allocate arrays'       
+  allocate(X(NI,NJ)) ! mesh nodes X-coordinates
+  allocate(Y(NI,NJ)) ! mesh nodes Y-coordinates
+  allocate(P(0:NI,0:NJ))   ! Pressure
+  allocate(U(0:NI,0:NJ)) 
+  allocate(V(0:NI,0:NJ)) 
+  allocate(T(0:NI,0:NJ))
+  allocate(Ro(0:NI,0:NJ))
+  allocate(M(0:NI,0:NJ))
+  allocate(CellVolume(NI-1,NJ-1))   ! Cell Volumes    
+  allocate(CellCenter(0:NI,0:NJ,2)) ! Cell Centers
+  allocate(IFaceCenter( NI,NJ-1,2)) ! Face Centers for I-faces
+  allocate(IFaceVector( NI,NJ-1,2)) ! Face Vectors for I-faces
+  allocate(JFaceCenter( NI-1,NJ,2)) ! Face Centers for J-faces
+  allocate(JFaceVector( NI-1,NJ,2)) ! Face Vectors for I-faces
+
+!===  READ GRID ===
+  WRITE(*,*) 'Read mesh from file: ', MeshFile
+  READ(IO,*) ((X(I,J),Y(I,J),rtmp, I=1,NI),J=1,NJ)
+  CLOSE(IO)
+
+!=== CALCULATE METRIC ===
+  WRITE(*,*) 'Calculate metric'       
+  Call B_CalcMetric(NI,NJ,X,Y,CellCenter,CellVolume,IFaceCenter,IFaceVector,JFaceCenter,JFaceVector) 
+
+!=== INITIALIZE FIELDS ===
+  P = Pin
+  U = Uin
+  V = Vin
+  T = Tin
+
+!=== INITIATE FIELDS WITH Pressure FUNCTION ===
+  !WRITE(*,*) 'Initiate fields with Pressure function'       
+  !DO J = 0,NJ
+  !  DO I = 0,NI
+  !    P(I,J) = Pressure(CellCenter(I,J,1),CellCenter(i,j,2))
+  !  ENDDO
+  !ENDDO
+  
+  
+  
+call B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,cfl,&
+NT,Pin,Uin,Vin,Tin)
+  
+  
+
+!=== CALCULATE Ro AND M (ПОСЛЕ инициализации полей!) ===
+  WRITE(*,*) 'Calculate Ro and M'       
+  Ro(:,:) = P(:,:)/(Rm*T(:,:))
+  M(:,:) = sqrt((U(:,:)*U(:,:)+V(:,:)*V(:,:))/(gamma*Rm*T(:,:)))
+
+!=== OUTPUT FIELDS ===
+  WRITE(*,*) 'Output fields to file: ', OutputFile       
+  Open(IO,FILE=OutputFile)
+  Call B_OutputFields(IO,NI,NJ,X,Y,P,U,V,T,Ro,M)
+  Close(IO)
+
+  WRITE(*,*) 'Debug info:'
+  WRITE(*,*) 'P(1,1) = ', P(1,1)
+  WRITE(*,*) 'U(1,1) = ', U(1,1)
+  WRITE(*,*) 'V(1,1) = ', V(1,1)
+  WRITE(*,*) 'T(1,1) = ', T(1,1)
+  WRITE(*,*) 'Ro(1,1) = ', Ro(1,1)
+  WRITE(*,*) 'M(1,1) = ', M(1,1)
+  WRITE(*,*) 'gamma = ', gamma
+  WRITE(*,*) 'Rm = ', Rm
+
+END PROGRAM Main
+
+SUBROUTINE B_CalcMetric(NI,NJ,X,Y,CellCenter,CellVolume,IFaceCenter,IFaceVector,JFaceCenter,JFaceVector) 
+  REAL X(NI,NJ),Y(NI,NJ),&                               ! input: nodes coordinates
+       CellCenter(0:NI,0:NJ,2),CellVolume(NI-1,NJ-1),&   !output: cell centers and volumes
+       IFaceCenter( NI,NJ-1,2),IFaceVector( NI,NJ-1,2),& !        face centers and vectors for I-faces
+       JFaceCenter( NI-1,NJ,2),JFaceVector( NI-1,NJ,2)   !        face centers and vectors for J-faces
+  REAL r(2)
+
+  !=== FACE CENTERS AND FACE VECTORS ===
+  ! I-DIRECTION
+  DO J = 1,NJ-1
+    DO I = 1,NI
+      r(1) = X(I,J+1) - X(I,J)  ! r = vector from one node to another
+      r(2) = Y(I,J+1) - Y(I,J)
+      IFaceVector(I,J,1) = r(2) ! IFaceVector = r rotated on 90 degree
+      IFaceVector(I,J,2) =-r(1) ! IFaceVector directed to increasing I-index
+      IFaceCenter(I,J,1) = 0.5*(X(i,j)+x(i,j+1))
+      IFaceCenter(I,J,2) = 0.5*(Y(i,j)+Y(i,j+1))
+    ENDDO
+  ENDDO
+
+  ! J-DIRECTION
+  DO J = 1,NJ
+    DO I = 1,NI-1
+      r(1) = X(I+1,J) - X(I,J)  ! r = vector from one node to another
+      r(2) = Y(I+1,J) - Y(I,J)
+      JFaceVector(I,J,1) =-r(2) ! JFaceVector = r rotated on -90 degree
+      JFaceVector(I,J,2) = r(1) ! JFaceVector directed to increasing J-index 
+      JFaceCenter(I,J,1) = 0.5*(X(i,j)+x(i+1,j))
+      JFaceCenter(I,J,2) = 0.5*(Y(i,j)+Y(i+1,j))
+    ENDDO
+  ENDDO
+
+
+ !=== CELL VOLUMES ===
+  DO J = 1,NJ-1
+    DO I = 1,NI-1
+      r(1)=X(I+1,J+1) - X(I,J)
+      r(2)=Y(I+1,J+1) - Y(I,J)
+      CellVolume(I,J) = 0.5*DOT_PRODUCT(IFaceVector(I,J,:),r)& ! sum surfaces of two triangles
+                      + 0.5*DOT_PRODUCT(JFaceVector(I,J,:),r)
+    ENDDO
+  ENDDO
+
+
+  !=== CELL CENTERS ===
+  ! FOR INNER CELLS: CENTER OF CONTOUR (sum of FaceCenter*FaceLength/Perimeter)
+  DO J = 1,NJ-1
+    DO  I = 1,NI-1
+      CellCenter(I,J,:) = ( IFaceCenter(I  ,J,:)*Norm2(IFaceVector(I  ,J,:))+&
+                            IFaceCenter(I+1,J,:)*Norm2(IFaceVector(I+1,J,:))+&
+                            JFaceCenter(I,J  ,:)*Norm2(JFaceVector(I,J  ,:))+&
+                            JFaceCenter(I,J+1,:)*Norm2(JFaceVector(I,J+1,:)) )&
+                         /( Norm2(IFaceVector(I,J,:))+Norm2(IFaceVector(I+1,J,:))+&
+                            Norm2(JFaceVector(I,J,:))+Norm2(JFaceVector(I,J+1,:)) )
+    ENDDO
+  ENDDO
+
+  ! FOR DUMMY CELLS ON BOUNDARIES: CELL CENTER = FACE CENTER
+  ! I-BOUNDARIES -----------------------------------------------------
+  DO NBOUND = 1,2
+    IF (NBOUND.EQ.1) THEN
+      IBOUND =  1; IOUT =  0
+    ELSE 
+      IBOUND = NI; IOUT =  NI
+    ENDIF
+    DO J = 1,NJ-1
+      CellCenter(IOUT,J,:) = IFaceCenter(IBOUND,J,:)
+    ENDDO
+  ENDDO
+
+  ! J-BOUNDARIES -----------------------------------------------------
+   DO NBOUND = 1,2
+    IF (NBOUND.EQ.1) THEN
+      JBOUND = 1;  JOUT =  0
+    ELSE 
+      JBOUND = NJ; JOUT =  NJ
+    ENDIF
+    DO  I = 1,NI-1
+      CellCenter(I,JOUT,:) = JFaceCenter(I,JBOUND,:) 
+    ENDDO
+  ENDDO
+
+END SUBROUTINE
+
+
+Subroutine B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,cfl,NT,Pin,Uin,Vin,Tin)
+    
+    implicit none
+    integer, intent(in) :: ni, nj, nt
+    real, intent(inout), dimension(0:NI,0:NJ) :: P, U, V, T
+    real, intent(in) :: IFaceVector(NI,NJ-1,2), JFaceVector(NI-1,NJ,2), CellVolume(NI-1,NJ-1)
+    real, intent(in) :: gamma, cp, Rm, cfl, Pin, Uin, Vin, Tin
+    integer :: i, j, k
+    integer, parameter :: Order = 2  ! Порядок точности
+    real, parameter    :: epsilon = 1e-8
+    
+    real :: dt, Minlet, ro_in, Hin, Vn
+    real, dimension(0:NI,0:NJ) :: ro, roU, roV, roE
+    real, dimension(0:NI,0:NJ) :: ro1, roU1, roV1, roE1
+    real, dimension(0:NI,0:NJ) :: Res1, Res2, Res3, Res4
+    real, dimension(0:NI,0:NJ) :: rp, ru, rv, rT, ksip, ksiu, ksiv, ksiT
+    
+    real :: Flux(4), qL(4), qR(4), SF(2)
+    
+    P = Pin
+    U = Uin
+    V = Vin
+    T = Tin
+    
+    ro_in = Pin / (Rm * Tin)
+    Hin   = cp * Tin + 0.5 * (Uin**2 + Vin**2)
+    Minlet = sqrt(Uin**2 + Vin**2) / sqrt(gamma * Rm * Tin)
+    
+    do i = 0, ni
+        do j = 0, nj
+            ro(i,j)  = P(i,j) / (Rm * T(i,j))
+            roU(i,j) = ro(i,j) * U(i,j)
+            roV(i,j) = ro(i,j) * V(i,j)
+            roE(i,j) = ro(i,j) * (cp / gamma * T(i,j) + 0.5 * (U(i,j)**2 + V(i,j)**2))
+        end do
+    end do
+    
+    open(12, file = 'Residuals.plt')
+    write(12,*) 'Variables = "iter","ResP","ResU","ResV","ResT"'
+    
+  
+    do k = 1, nt
+        
+        Res1 = 0.0
+        Res2 = 0.0 
+        Res3 = 0.0
+        Res4 = 0.0
+        
+     
+        do j = 1, nj - 1
+            do i = 2, ni - 1
+                if (Order == 2) then
+                    ! Реконструкция 
+                    rp(i,j) = (P(i+1,j)-P(i,j)) / (P(i,j)-P(i-1,j) + epsilon)
+                    ru(i,j) = (U(i+1,j)-U(i,j)) / (U(i,j)-U(i-1,j) + epsilon)
+                    rv(i,j) = (V(i+1,j)-V(i,j)) / (V(i,j)-V(i-1,j) + epsilon)
+                    rT(i,j) = (T(i+1,j)-T(i,j)) / (T(i,j)-T(i-1,j) + epsilon)
+                    
+                    ksip(i,j) = (rp(i,j)**2 + rp(i,j)) / (rp(i,j)**2 + 1.0)
+                    ksiU(i,j) = (ru(i,j)**2 + ru(i,j)) / (ru(i,j)**2 + 1.0)
+                    ksiV(i,j) = (rv(i,j)**2 + rv(i,j)) / (rv(i,j)**2 + 1.0)
+                    ksiT(i,j) = (rT(i,j)**2 + rT(i,j)) / (rT(i,j)**2 + 1.0)
+                    qR(1)=P(i,j)-0.5*ksip(i,j)*(P(i,j)-P(i-1,j))
+				qR(2)=U(i,j)-0.5*ksiU(i,j)*(U(i,j)-U(i-1,j))
+				qR(3)=V(i,j)-0.5*ksiV(i,j)*(V(i,j)-V(i-1,j))
+				qR(4)=T(i,j)-0.5*ksiT(i,j)*(T(i,j)-T(i-1,j))
+
+				qL(1)=P(i-1,j)+0.5*ksip(i-1,j)*(P(i,j)-P(i-1,j))
+				qL(2)=U(i-1,j)+0.5*ksiU(i-1,j)*(U(i,j)-U(i-1,j))
+				qL(3)=V(i-1,j)+0.5*ksiV(i-1,j)*(V(i,j)-V(i-1,j))
+				qL(4)=T(i-1,j)+0.5*ksiT(i-1,j)*(T(i,j)-T(i-1,j))
+	
+                else
+                                qR(1)=P(i,j)  !p
+				qR(2)=U(i,j)  !u
+				qR(3)=V(i,j)  !v
+				qR(4)=T(i,j)  !T
+				qL(1)=P(i-1,j)
+				qL(2)=U(i-1,j)
+				qL(3)=V(i-1,j)
+				qL(4)=T(i-1,j)                    
+                end if
+                
+                SF = IFaceVector(i,j,:)
+                call Calc_Flux(SF, qR, qL, gamma, cp, Rm, Minlet, Flux)
+                
+                Res1(i,j) = Res1(i,j) - Flux(1)
+                Res1(i-1,j) = Res1(i-1,j) + Flux(1)
+                Res2(i,j) = Res2(i,j) - Flux(2)
+                Res2(i-1,j) = Res2(i-1,j) + Flux(2)
+                Res3(i,j) = Res3(i,j) - Flux(3)
+                Res3(i-1,j) = Res3(i-1,j) + Flux(3)
+                Res4(i,j) = Res4(i,j) - Flux(4)
+                Res4(i-1,j) = Res4(i-1,j) + Flux(4)
+            end do
+        end do
+        
+      
+        do j = 2, nj - 1
+            do i = 1, ni - 1
+                if (Order == 2) then
+                    rp(i,j) = (P(i,j+1)-P(i,j)) / (P(i,j)-P(i,j-1) + epsilon)
+                    ru(i,j) = (U(i,j+1)-U(i,j)) / (U(i,j)-U(i,j-1) + epsilon)
+                    rv(i,j) = (V(i,j+1)-V(i,j)) / (V(i,j)-V(i,j-1) + epsilon)
+                    rT(i,j) = (T(i,j+1)-T(i,j)) / (T(i,j)-T(i,j-1) + epsilon)
+                    
+                    ksip(i,j) = (rp(i,j)**2 + rp(i,j)) / (rp(i,j)**2 + 1.0)
+                    ksiU(i,j) = (ru(i,j)**2 + ru(i,j)) / (ru(i,j)**2 + 1.0)
+                    ksiV(i,j) = (rv(i,j)**2 + rv(i,j)) / (rv(i,j)**2 + 1.0)
+                    ksiT(i,j) = (rT(i,j)**2 + rT(i,j)) / (rT(i,j)**2 + 1.0)
+                    
+                    qR(1)=P(i,j)-0.5*ksip(i,j)*(P(i,j)-P(i,j-1))
+				qR(2)=U(i,j)-0.5*ksiU(i,j)*(U(i,j)-U(i,j-1))
+				qR(3)=V(i,j)-0.5*ksiV(i,j)*(V(i,j)-V(i,j-1))
+				qR(4)=T(i,j)-0.5*ksiT(i,j)*(T(i,j)-T(i,j-1))
+
+				qL(1)=P(i,j-1)+0.5*ksip(i,j-1)*(P(i,j)-P(i,j-1))
+				qL(2)=U(i,j-1)+0.5*ksiU(i,j-1)*(U(i,j)-U(i,j-1))
+				qL(3)=V(i,j-1)+0.5*ksiV(i,j-1)*(V(i,j)-V(i,j-1))
+				qL(4)=T(i,j-1)+0.5*ksiT(i,j-1)*(T(i,j)-T(i,j-1))
+                else
+                                qR(1)=P(i,j)  !p
+				qR(2)=U(i,j)  !u
+				qR(3)=V(i,j)  !v
+				qR(4)=T(i,j)  !T
+				qL(1)=P(i,j-1)
+				qL(2)=U(i,j-1)
+				qL(3)=V(i,j-1)
+				qL(4)=T(i,j-1)
+                end if
+                
+                SF = JFaceVector(i,j,:)
+                call Calc_Flux(SF, qR, qL, gamma, cp, Rm, Minlet, Flux)
+                
+                Res1(i,j) = Res1(i,j) - Flux(1)
+                Res1(i,j-1) = Res1(i,j-1) + Flux(1)
+                Res2(i,j) = Res2(i,j) - Flux(2)
+                Res2(i,j-1) = Res2(i,j-1) + Flux(2)
+                Res3(i,j) = Res3(i,j) - Flux(3)
+                Res3(i,j-1) = Res3(i,j-1) + Flux(3)
+                Res4(i,j) = Res4(i,j) - Flux(4)
+                Res4(i,j-1) = Res4(i,j-1) + Flux(4)
+            end do
+        end do
+        
+        ! Граничные условия
+   
+        do j = 1, nj - 1
+            ! вход
+            SF = IFaceVector(1,j,:)
+            Vn = U(1,j)*SF(1) + V(1,j)*SF(2)
+            Flux(1) = ro(1,j)*Vn
+            Flux(2) = ro(1,j)*Vn*U(1,j) + P(1,j)*SF(1)
+            Flux(3) = ro(1,j)*Vn*V(1,j) + P(1,j)*SF(2)
+            Flux(4) = ro(1,j)*Vn*(cp*T(1,j) + 0.5*(U(1,j)**2 + V(1,j)**2))
+            Res1(1,j) = Res1(1,j) - Flux(1)
+            Res2(1,j) = Res2(1,j) - Flux(2)
+            Res3(1,j) = Res3(1,j) - Flux(3)
+            Res4(1,j) = Res4(1,j) - Flux(4)
+            
+            ! выход
+            SF = IFaceVector(ni,j,:)
+            Vn = U(ni-1,j)*SF(1) + V(ni-1,j)*SF(2)
+            Flux(1) = ro(ni-1,j)*Vn
+            Flux(2) = ro(ni-1,j)*Vn*U(ni-1,j) + P(ni-1,j)*SF(1)
+            Flux(3) = ro(ni-1,j)*Vn*V(ni-1,j) + P(ni-1,j)*SF(2)
+            Flux(4) = ro(ni-1,j)*Vn*(cp*T(ni-1,j) + 0.5*(U(ni-1,j)**2 + V(ni-1,j)**2))
+            Res1(ni-1,j) = Res1(ni-1,j) + Flux(1)
+            Res2(ni-1,j) = Res2(ni-1,j) + Flux(2)
+            Res3(ni-1,j) = Res3(ni-1,j) + Flux(3)
+            Res4(ni-1,j) = Res4(ni-1,j) + Flux(4)
+        end do
+        
+   
+        do i = 1, ni - 1
+            ! нижняя стенка
+            SF = JFaceVector(i,1,:)
+            P(i,0) = P(i,1)
+            flux(1)=0.0
+	    flux(2)=P(i,0)*sf(1)
+	    flux(3)=P(i,0)*sf(2)
+	    flux(4)=0.0
+            Res1(i,1) = Res1(i,1) - Flux(1)
+            Res2(i,1) = Res2(i,1) - Flux(2)
+            Res3(i,1) = Res3(i,1) - Flux(3)
+            Res4(i,1) = Res4(i,1) - Flux(4)
+            
+            ! верхняя стенка
+            SF = JFaceVector(i,nj,:)
+                        flux(1)=0.0
+			flux(2)=P(i,nj-1)*sf(1)
+			flux(3)=P(i,nj-1)*sf(2)
+			flux(4)=0.0
+			VN=Uin*SF(1)+Vin*SF(2)
+            Res1(i,nj-1) = Res1(i,nj-1) + Flux(1)
+            Res2(i,nj-1) = Res2(i,nj-1) + Flux(2)
+            Res3(i,nj-1) = Res3(i,nj-1) + Flux(3)
+            Res4(i,nj-1) = Res4(i,nj-1) + Flux(4)
+        end do
+        
+       
+        dt = cfl * sqrt(minval(CellVolume)) / (sqrt(Uin**2 + Vin**2))
+        
+        do i = 1, ni - 1
+            do j = 1, nj - 1
+                ro1(i,j)  = ro(i,j)  - dt/CellVolume(i,j)*Res1(i,j)
+                roU1(i,j) = roU(i,j) - dt/CellVolume(i,j)*Res2(i,j)
+                roV1(i,j) = roV(i,j) - dt/CellVolume(i,j)*Res3(i,j)
+                roE1(i,j) = roE(i,j) - dt/CellVolume(i,j)*Res4(i,j)
+            end do
+        end do
+        
+        ro(1:ni-1, 1:nj-1)  = ro1(1:ni-1, 1:nj-1)
+        roU(1:ni-1, 1:nj-1) = roU1(1:ni-1, 1:nj-1)
+        roV(1:ni-1, 1:nj-1) = roV1(1:ni-1, 1:nj-1)
+        roE(1:ni-1, 1:nj-1) = roE1(1:ni-1, 1:nj-1)
+        
+        ! Восстановление примитивных переменных
+        do i = 1, ni - 1
+            do j = 1, nj - 1
+                U(i,j) = roU(i,j) / ro(i,j)
+                V(i,j) = roV(i,j) / ro(i,j)
+                T(i,j) = gamma/cp * (roE(i,j)/ro(i,j) - 0.5*(U(i,j)**2 + V(i,j)**2))
+                P(i,j) = ro(i,j) * Rm * T(i,j)
+            end do
+        end do
+        
+ 
+       write(*,*) k,maxval(Res1(1:NI-1,1:nj-1)),maxval(Res2(1:NI-1,1:nj-1)),maxval(Res3(1:NI-1,1:nj-1)),maxval(Res4(1:NI-1,nj-1))
+		write(12,*)k,maxval(Res1(1:NI-1,1:nj-1)),maxval(Res2(1:NI-1,1:nj-1)),maxval(Res3(1:NI-1,1:nj-1)),maxval(Res4(1:NI-1,nj-1))
+        
+    end do
+    close(12)
+
+End Subroutine
+
+subroutine Calc_Flux(SF,qR,qL,gamma,Cp,Rm,Minlet,Flux)
+  implicit none
+  real :: SF(2),qR(4),qL(4),gamma,Cp,Rm,Flux(4),SL,SR,Szv,CL,CR
+  real :: VNL,VNR,VNF,roL,roR
+  real :: wRzv(4),wLzv(4),FluxL(4),FluxR(4),D(4),wL(4),wR(4)
+  real :: SS,nx,ny
+  real :: M,ML,MR,MplusL,MminusL,MplusR,MminusR,Mf,PplusL,PminusL,PplusR,PminusR,P
+  real :: Fluxp(4),Fluxc(4),FluxLc(4),FluxRc(4)
+  real :: Cf,rof,M0,Msquare,fa,Kp,sigma,alpha,beta,Ku,Minlet
+  real :: M1minus,M1plus,M2minusL,M2minusR,M2plusL,M2plusR
+  integer scheme
+  
+  scheme=2
+  
+  
+  SS=sqrt(SF(1)*SF(1) + SF(2)*SF(2))
+  
+  nx=SF(1)/SS
+  ny=SF(2)/SS
+  
+  CL=sqrt(gamma*Rm*qL(4))
+  CR=sqrt(gamma*Rm*qR(4))
+  
+  roL = qL(1)/(Rm*qL(4))
+  roR = qR(1)/(Rm*qR(4))
+  
+  
+  
+  !===== Upwind =====
+  if (scheme==1) then
+	  VNL = qL(2)*SF(1) + qL(3)*SF(2)
+	  VNR = qR(2)*SF(1) + qR(3)*SF(2)
+	  VNf = (VNL + VNR)/2.0
+
+	  if (VNf > 0)then
+		roL = qL(1)/(Rm*qL(4))
+		Flux(1) = roL*VNL
+		Flux(2) = roL*VNL*qL(2) + qR(1)*SF(1)
+		Flux(3) = roL*VNL*qL(3) + qR(1)*SF(2)
+		Flux(4) = roL*VNL*(Cp*qL(4) + (qL(2)*qL(2)+qL(3)*qL(3))/2.0)
+	  else
+		roR = qR(1)/(Rm*qR(4))
+		Flux(1) = roR*VNR
+		Flux(2) = roR*VNR*qR(2) + qL(1)*SF(1)
+		Flux(3) = roR*VNR*qR(3) + qL(1)*SF(2)
+		Flux(4) = roR*VNR*(Cp*qR(4) + (qR(2)*qR(2)+qR(3)*qR(3))/2.0)
+	  end if
+  end if
+  
+  
+  
+  !===== HLLC =====
+  if (scheme==2) then
+	
+	VNL = qL(2)*nx + qL(3)*ny
+	VNR = qR(2)*nx + qR(3)*ny
+	
+	SL=min(VNL-CL,VNR-CR)
+	SR=max(VNL+CL,VNR+CR)
+		
+	Szv=( (qR(1)-qL(1))+roL*VNL*(SL-VNL)-roR*VNR*(SR-VNR) ) / ( roL*(SL-VNL)-roR*(SR-VNR) )
+	!write(*,*) Szv
+		
+	FluxL(1) = roL*VNL
+	FluxL(2) = roL*VNL*qL(2) + qR(1)*nx
+	FluxL(3) = roL*VNL*qL(3) + qR(1)*ny
+	FluxL(4) = roL*VNL*(Cp*qL(4) + (qL(2)*qL(2)+qL(3)*qL(3))/2.0)
+		
+	FluxR(1) = roR*VNR
+	FluxR(2) = roR*VNR*qR(2) + qL(1)*nx
+	FluxR(3) = roR*VNR*qR(3) + qL(1)*ny
+	FluxR(4) = roR*VNR*(Cp*qR(4) + (qR(2)*qR(2)+qR(3)*qR(3))/2.0)
+	
+	D(1)=0
+	D(2)=nx
+	D(3)=ny
+	D(4)=Szv
+	
+	wL(1)=roL
+	wL(2)=roL*qL(2)
+	wL(3)=roL*qL(3)
+	wL(4)=roL*(Cp/gamma*qL(4) + (qL(2)*qL(2)+qL(3)*qL(3))/2.0)
+	
+	wR(1)=roR
+	wR(2)=roR*qR(2)
+	wR(3)=roR*qR(3)
+	wR(4)=roR*(Cp/gamma*qR(4) + (qR(2)*qR(2)+qR(3)*qR(3))/2.0)
+	
+
+	if (SL >= 0.0) then
+		Flux=FluxL
+	else if (SR <= 0.0) then
+		Flux=FluxR
+	else if (Szv >= 0) then	
+		wLzv=(SL*wL-FluxL+(qL(1)+roL*(SL-VNL)*(Szv-VNL))*D)/(SL-Szv)
+		Flux=( Szv*(SL*wL-FluxL)+SL*(qL(1)+roL*(SL-VNL)*(Szv-VNL ))*D ) / (SL-Szv)	
+	else
+		wRzv=(SR*wR-FluxR+(qR(1)+roR*(SR-VNR)*(Szv-VNR))*D)/(SR-Szv)
+		Flux=( Szv*(SR*wR-FluxR)+SR*(qR(1)+roR*(SR-VNR)*(Szv-VNR ))*D ) / (SR-Szv)
+	end if
+	
+	Flux=Flux*SS
+	
+  end if
+  
+  
+  
+  !===== AUSM =====
+  if (scheme==3) then
+	
+	VNL = qL(2)*nx + qL(3)*ny
+	VNR = qR(2)*nx + qR(3)*ny
+	
+	ML=(VNL)/CL
+	MR=(VNR)/CR
+	
+	
+	if (abs(ML)<=1.0) then
+		MplusL=0.25*(ML+1)**2+0.125*(ML**2-1)**2
+		!MminusL=-0.25*(ML-1)**2
+		
+		PplusL=0.25*qL(1)*(ML+1)**2*(2.0-ML)+0.1875*ML*(ML**2+1)**2
+		!PminusL=-0.25*qL(1)*(ML-1)**2*(2.0+ML)
+	else
+		MplusL=0.5*(ML+abs(ML))
+		!MminusL=0.5*(ML-abs(ML))
+		
+		PplusL=0.5*qL(1)*(ML+abs(ML))/ML
+		!PminusL=0.5*qL(1)*(ML-abs(ML))/ML
+	end if
+	
+	if (abs(MR)<=1.0) then
+		!MplusR=0.25*(MR+1)**2
+		MminusR=-0.25*(MR-1)**2-0.125*(ML**2-1)**2
+		
+		!PplusR=0.25*qR(1)*(MR+1)**2*(2.0-MR)
+		PminusR=0.25*qR(1)*(MR-1)**2*(2.0+MR)-0.1875*ML*(ML**2-1)**2
+	else
+		!MplusR=0.5*(MR+abs(MR))
+		MminusR=0.5*(MR-abs(MR))
+		
+		!PplusR=0.5*qR(1)*(MR+abs(MR))/MR
+		PminusR=0.5*qR(1)*(MR-abs(MR))/MR
+	end if
+	
+	Mf=MplusL+MminusR
+	
+	P=PplusL+PminusR
+	
+	!Fc
+	FluxLc(1) = roL*CL
+	FluxLc(2) = roL*CL*qL(2)
+	FluxLc(3) = roL*CL*qL(3)
+	FluxLc(4) = roL*CL*(Cp*qL(4) + (qL(2)*qL(2)+qL(3)*qL(3))/2.0)
+	
+	FluxRc(1) = roR*CR
+	FluxRc(2) = roR*CR*qR(2)
+	FluxRc(3) = roR*CR*qR(3)
+	FluxRc(4) = roR*CR*(Cp*qR(4) + (qR(2)*qR(2)+qR(3)*qR(3))/2.0)
+	
+	if (Mf >= 0) then
+		Fluxc(1) = Mf*FluxLc(1)
+		Fluxc(2) = Mf*FluxLc(2)
+		Fluxc(3) = Mf*FluxLc(3)
+		Fluxc(4) = Mf*FluxLc(4)
+	else
+		Fluxc(1) = Mf*FluxRc(1)
+		Fluxc(2) = Mf*FluxRc(2)
+		Fluxc(3) = Mf*FluxRc(3)
+		Fluxc(4) = Mf*FluxRc(4)
+	end if
+	
+	!Fp
+	Fluxp(1) = 0
+	Fluxp(2) = P*nx
+	Fluxp(3) = P*ny
+	Fluxp(4) = 0
+	
+	Flux = SS*(Fluxc + Fluxp)
+	
+  end if 
+  
+end subroutine
+Subroutine B_OutputFields(IO,NI,NJ,X,Y,P,U,V,T,Ro,M)
+  Integer:: IO, NI, NJ, I, J
+  Real,Dimension(NI,NJ):: X, Y
+  Real,Dimension(0:NI,0:NJ):: P, U, V, T, Ro, M
+
+  Write(IO,*) 'VARIABLES = "X", "Y", "P", "U", "V", "T", "Ro", "M"' 
+  Write(IO,*) 'ZONE I=',NI,', J=',NJ,', DATAPACKING=BLOCK, VARLOCATION=([3-30]=CELLCENTERED)'
+  
+  Write(IO,'(100F16.7)') X(1:NI,1:NJ)
+  Write(IO,'(100F16.7)') Y(1:NI,1:NJ)
+ 
+  Write(IO,'(100F16.7)') P(1:NI-1,1:NJ-1)
+  Write(IO,'(100F16.7)') U(1:NI-1,1:NJ-1)
+  Write(IO,'(100F16.7)') V(1:NI-1,1:NJ-1)
+  Write(IO,'(100F16.7)') T(1:NI-1,1:NJ-1)
+  Write(IO,'(100F16.7)') Ro(1:NI-1,1:NJ-1)
+  Write(IO,'(100F16.7)') M(1:NI-1,1:NJ-1)
+
+  
+ 
+  WRITE(*,*) 'OutputFields: M(1,1) = ', M(1,1)
+  WRITE(*,*) 'OutputFields: Max M = ', MAXVAL(M(1:NI-1,1:NJ-1))
+  WRITE(*,*) 'OutputFields: Min M = ', MINVAL(M(1:NI-1,1:NJ-1))
+  
+End Subroutine
