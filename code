@@ -189,14 +189,13 @@ END SUBROUTINE
 Subroutine B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,cfl,NT,Pin,Uin,Vin,Tin)
     
     implicit none
-    integer, intent(in) :: ni, nj, nt
-    real, intent(inout), dimension(0:NI,0:NJ) :: P, U, V, T
-    real, intent(in) :: IFaceVector(NI,NJ-1,2), JFaceVector(NI-1,NJ,2), CellVolume(NI-1,NJ-1)
-    real, intent(in) :: gamma, cp, Rm, cfl, Pin, Uin, Vin, Tin
+    integer :: ni, nj, nt
+    real, dimension(0:NI,0:NJ) :: P, U, V, T
+    real :: IFaceVector(NI,NJ-1,2), JFaceVector(NI-1,NJ,2), CellVolume(NI-1,NJ-1)
+    real :: gamma, cp, Rm, cfl, Pin, Uin, Vin, Tin
     integer :: i, j, k
-    integer, parameter :: Order = 2  ! Порядок точности
+    integer, parameter :: Order = 1  ! Порядок точности
     real, parameter    :: epsilon = 1e-8
-    
     real :: dt, Minlet, ro_in, Hin, Vn
     real, dimension(0:NI,0:NJ) :: ro, roU, roV, roE
     real, dimension(0:NI,0:NJ) :: ro1, roU1, roV1, roE1
@@ -244,19 +243,21 @@ Subroutine B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,
                     rv(i,j) = (V(i+1,j)-V(i,j)) / (V(i,j)-V(i-1,j) + epsilon)
                     rT(i,j) = (T(i+1,j)-T(i,j)) / (T(i,j)-T(i-1,j) + epsilon)
                     
-                    ksip(i,j) = (rp(i,j)**2 + rp(i,j)) / (rp(i,j)**2 + 1.0)
-                    ksiU(i,j) = (ru(i,j)**2 + ru(i,j)) / (ru(i,j)**2 + 1.0)
-                    ksiV(i,j) = (rv(i,j)**2 + rv(i,j)) / (rv(i,j)**2 + 1.0)
-                    ksiT(i,j) = (rT(i,j)**2 + rT(i,j)) / (rT(i,j)**2 + 1.0)
-                    qR(1)=P(i,j)-0.5*ksip(i,j)*(P(i,j)-P(i-1,j))
-				qR(2)=U(i,j)-0.5*ksiU(i,j)*(U(i,j)-U(i-1,j))
-				qR(3)=V(i,j)-0.5*ksiV(i,j)*(V(i,j)-V(i-1,j))
-				qR(4)=T(i,j)-0.5*ksiT(i,j)*(T(i,j)-T(i-1,j))
+                   
+                ksip(i,j)=max(0.0, min(1.0, rp(i,j)))
+                ksiU(i,j)=max(0.0, min(1.0, rU(i,j)))
+                ksiV(i,j)=max(0.0, min(1.0, rV(i,j)))
+                ksiT(i,j)=max(0.0, min(1.0, rT(i,j)))
 
-				qL(1)=P(i-1,j)+0.5*ksip(i-1,j)*(P(i,j)-P(i-1,j))
-				qL(2)=U(i-1,j)+0.5*ksiU(i-1,j)*(U(i,j)-U(i-1,j))
-				qL(3)=V(i-1,j)+0.5*ksiV(i-1,j)*(V(i,j)-V(i-1,j))
-				qL(4)=T(i-1,j)+0.5*ksiT(i-1,j)*(T(i,j)-T(i-1,j))
+                qR(1)=P(i,j)-0.5*ksip(i,j)*(P(i,j)-P(i-1,j))
+		qR(2)=U(i,j)-0.5*ksiU(i,j)*(U(i,j)-U(i-1,j))
+		qR(3)=V(i,j)-0.5*ksiV(i,j)*(V(i,j)-V(i-1,j))
+		qR(4)=T(i,j)-0.5*ksiT(i,j)*(T(i,j)-T(i-1,j))
+
+		qL(1)=P(i-1,j)+0.5*ksip(i-1,j)*(P(i,j)-P(i-1,j))
+		qL(2)=U(i-1,j)+0.5*ksiU(i-1,j)*(U(i,j)-U(i-1,j))
+		qL(3)=V(i-1,j)+0.5*ksiV(i-1,j)*(V(i,j)-V(i-1,j))
+		qL(4)=T(i-1,j)+0.5*ksiT(i-1,j)*(T(i,j)-T(i-1,j))
 	
                 else
                                 qR(1)=P(i,j)  !p
@@ -272,14 +273,15 @@ Subroutine B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,
                 SF = IFaceVector(i,j,:)
                 call Calc_Flux(SF, qR, qL, gamma, cp, Rm, Minlet, Flux)
                 
-                Res1(i,j) = Res1(i,j) - Flux(1)
-                Res1(i-1,j) = Res1(i-1,j) + Flux(1)
-                Res2(i,j) = Res2(i,j) - Flux(2)
-                Res2(i-1,j) = Res2(i-1,j) + Flux(2)
-                Res3(i,j) = Res3(i,j) - Flux(3)
-                Res3(i-1,j) = Res3(i-1,j) + Flux(3)
-                Res4(i,j) = Res4(i,j) - Flux(4)
-                Res4(i-1,j) = Res4(i-1,j) + Flux(4)
+				res1(i,j)=res1(i,j)-flux(1)
+				res2(i,j)=res2(i,j)-flux(2)
+				res3(i,j)=res3(i,j)-flux(3)
+				res4(i,j)=res4(i,j)-flux(4)
+				res1(i-1,j)=res1(i-1,j)+flux(1)
+				res2(i-1,j)=res2(i-1,j)+flux(2)
+				res3(i-1,j)=res3(i-1,j)+flux(3)
+				res4(i-1,j)=res4(i-1,j)+flux(4)
+
             end do
         end do
         
@@ -292,22 +294,23 @@ Subroutine B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,
                     rv(i,j) = (V(i,j+1)-V(i,j)) / (V(i,j)-V(i,j-1) + epsilon)
                     rT(i,j) = (T(i,j+1)-T(i,j)) / (T(i,j)-T(i,j-1) + epsilon)
                     
-                    ksip(i,j) = (rp(i,j)**2 + rp(i,j)) / (rp(i,j)**2 + 1.0)
-                    ksiU(i,j) = (ru(i,j)**2 + ru(i,j)) / (ru(i,j)**2 + 1.0)
-                    ksiV(i,j) = (rv(i,j)**2 + rv(i,j)) / (rv(i,j)**2 + 1.0)
-                    ksiT(i,j) = (rT(i,j)**2 + rT(i,j)) / (rT(i,j)**2 + 1.0)
-                    
-                    qR(1)=P(i,j)-0.5*ksip(i,j)*(P(i,j)-P(i,j-1))
-				qR(2)=U(i,j)-0.5*ksiU(i,j)*(U(i,j)-U(i,j-1))
-				qR(3)=V(i,j)-0.5*ksiV(i,j)*(V(i,j)-V(i,j-1))
-				qR(4)=T(i,j)-0.5*ksiT(i,j)*(T(i,j)-T(i,j-1))
+                ksip(i,j)=max(0.0, min(1.0, rp(i,j)))
+                ksiU(i,j)=max(0.0, min(1.0, rU(i,j)))
+                ksiV(i,j)=max(0.0, min(1.0, rV(i,j)))
+                ksiT(i,j)=max(0.0, min(1.0, rT(i,j)))
 
-				qL(1)=P(i,j-1)+0.5*ksip(i,j-1)*(P(i,j)-P(i,j-1))
-				qL(2)=U(i,j-1)+0.5*ksiU(i,j-1)*(U(i,j)-U(i,j-1))
-				qL(3)=V(i,j-1)+0.5*ksiV(i,j-1)*(V(i,j)-V(i,j-1))
-				qL(4)=T(i,j-1)+0.5*ksiT(i,j-1)*(T(i,j)-T(i,j-1))
+                    
+                 qR(1)=P(i,j)-0.5*ksip(i,j)*(P(i,j)-P(i,j-1))
+		 qR(2)=U(i,j)-0.5*ksiU(i,j)*(U(i,j)-U(i,j-1))
+		 qR(3)=V(i,j)-0.5*ksiV(i,j)*(V(i,j)-V(i,j-1))
+		 qR(4)=T(i,j)-0.5*ksiT(i,j)*(T(i,j)-T(i,j-1))
+
+		 qL(1)=P(i,j-1)+0.5*ksip(i,j-1)*(P(i,j)-P(i,j-1))
+		 qL(2)=U(i,j-1)+0.5*ksiU(i,j-1)*(U(i,j)-U(i,j-1))
+		 qL(3)=V(i,j-1)+0.5*ksiV(i,j-1)*(V(i,j)-V(i,j-1))
+		 qL(4)=T(i,j-1)+0.5*ksiT(i,j-1)*(T(i,j)-T(i,j-1))
                 else
-                                qR(1)=P(i,j)  !p
+                qR(1)=P(i,j)  !p
 				qR(2)=U(i,j)  !u
 				qR(3)=V(i,j)  !v
 				qR(4)=T(i,j)  !T
@@ -320,14 +323,16 @@ Subroutine B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,
                 SF = JFaceVector(i,j,:)
                 call Calc_Flux(SF, qR, qL, gamma, cp, Rm, Minlet, Flux)
                 
-                Res1(i,j) = Res1(i,j) - Flux(1)
-                Res1(i,j-1) = Res1(i,j-1) + Flux(1)
-                Res2(i,j) = Res2(i,j) - Flux(2)
-                Res2(i,j-1) = Res2(i,j-1) + Flux(2)
-                Res3(i,j) = Res3(i,j) - Flux(3)
-                Res3(i,j-1) = Res3(i,j-1) + Flux(3)
-                Res4(i,j) = Res4(i,j) - Flux(4)
-                Res4(i,j-1) = Res4(i,j-1) + Flux(4)
+                			
+				res1(i,j)=res1(i,j)-flux(1)
+				res2(i,j)=res2(i,j)-flux(2)
+				res3(i,j)=res3(i,j)-flux(3)
+				res4(i,j)=res4(i,j)-flux(4)
+				res1(i,j-1)=res1(i,j-1)+flux(1)
+				res2(i,j-1)=res2(i,j-1)+flux(2)
+				res3(i,j-1)=res3(i,j-1)+flux(3)
+				res4(i,j-1)=res4(i,j-1)+flux(4)
+
             end do
         end do
         
@@ -415,13 +420,11 @@ Subroutine B_Euler(NI,NJ,IFaceVector,JFaceVector,CellVolume,P,U,V,T,gamma,cp,Rm,
         
  
        write(*,*) k,maxval(Res1(1:NI-1,1:nj-1)),maxval(Res2(1:NI-1,1:nj-1)),maxval(Res3(1:NI-1,1:nj-1)),maxval(Res4(1:NI-1,nj-1))
-		write(12,*)k,maxval(Res1(1:NI-1,1:nj-1)),maxval(Res2(1:NI-1,1:nj-1)),maxval(Res3(1:NI-1,1:nj-1)),maxval(Res4(1:NI-1,nj-1))
+		write(12,*)k,maxval(Res1(1:NI-1,1:nj-1)),maxval(Res2(1:NI-1,1:nj-1)),maxval(Res3(1:NI-1,1:nj-1)),maxval(Res4(1:NI-1,1:nj-1))
         
     end do
     close(12)
-
-End Subroutine
-
+end subroutine
 subroutine Calc_Flux(SF,qR,qL,gamma,Cp,Rm,Minlet,Flux)
   implicit none
   real :: SF(2),qR(4),qL(4),gamma,Cp,Rm,Flux(4),SL,SR,Szv,CL,CR
